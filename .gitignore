@@ -1,3 +1,8 @@
 .DS_Store
 bin/
 *.exe
+perf.data.old
+perf.data
+*.folded
+*.perf
+FlameGraph/

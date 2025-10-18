@@ -61,9 +61,9 @@ Ciphertext mul_cipher(Ciphertext c1, Ciphertext c2, double q, double t,
     }
   }
 
-  Poly c0_modq = coeff_mod(c0_res, q);
-  Poly c1_modq = coeff_mod(c1_res, q);
-  Poly c2_modq = coeff_mod(c2_res, q);
+  Poly c0_modq = coeff_mod(&c0_res, q);
+  Poly c1_modq = coeff_mod(&c1_res, q);
+  Poly c2_modq = coeff_mod(&c2_res, q);
 
   // Relinearization
   Poly prod_b = ring_mul_no_mod_q(rlk.b, c2_modq, poly_mod);
@@ -82,8 +82,8 @@ Ciphertext mul_cipher(Ciphertext c1, Ciphertext c2, double q, double t,
     }
   }
 
-  Poly c20_modq = coeff_mod(div_b, q);
-  Poly c21_modq = coeff_mod(div_a, q);
+  Poly c20_modq = coeff_mod(&div_b, q);
+  Poly c21_modq = coeff_mod(&div_a, q);
 
   Poly new_c0 = ring_add_mod(c0_modq, c20_modq, q, poly_mod);
   Poly new_c1 = ring_add_mod(c1_modq, c21_modq, q, poly_mod);

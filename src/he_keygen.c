@@ -27,7 +27,7 @@ EvalKey evaluate_keygen(SecretKey sk, size_t n, double q, Poly poly_mod,
   Poly a = gen_uniform_poly(n, new_modulus);
   Poly e = gen_normal_poly(n, 0.0, 1.0);
 
-  Poly s2 = poly_mul(sk, sk);
+  Poly s2 = poly_mul(&sk, &sk);
   Poly secret_scaled = poly_mul_scalar(s2, p);
 
   Poly neg_a = poly_mul_scalar(a, -1.0);
@@ -36,7 +36,7 @@ EvalKey evaluate_keygen(SecretKey sk, size_t n, double q, Poly poly_mod,
   Poly as_nege = ring_add_no_mod_q(as, neg_e, poly_mod);
   Poly b_ring = ring_add_no_mod_q(as_nege, secret_scaled, poly_mod);
 
-  Poly b = coeff_mod(b_ring, new_modulus);
+  Poly b = coeff_mod(&b_ring, new_modulus);
 
   EvalKey rlk;
   rlk.a = a;

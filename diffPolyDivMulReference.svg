@@ -1,0 +1,818 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="438" onload="init(evt)" viewBox="0 0 1200 438" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="438.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Diff: Original vs Poly Divmod Plus Mul Plus CoeMod Plus Reference Optimized</text>
+<text id="details" x="10.00" y="421" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="421" > </text>
+<g id="frames">
+<g >
+<title>create_poly (30,030,030 samples, 0.06%; 0.00%)</title><rect x="867.5" y="325" width="0.7" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="870.52" y="335.5" ></text>
+</g>
+<g >
+<title>decrypt (44,044,044 samples, 0.08%; -0.02%)</title><rect x="403.0" y="341" width="1.0" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="405.97" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="277" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="287.5" ></text>
+</g>
+<g >
+<title>coeff_mod (12,384,384,372 samples, 23.80%; -20.04%)</title><rect x="54.1" y="341" width="280.7" height="15.0" fill="rgb(139,139,255)" rx="2" ry="2" />
+<text  x="57.05" y="351.5" >coeff_mod</text>
+</g>
+<g >
+<title>poly_degree (4,804,804,800 samples, 9.23%; +9.23%)</title><rect x="758.2" y="325" width="108.9" height="15.0" fill="rgb(255,177,177)" rx="2" ry="2" />
+<text  x="761.15" y="335.5" >poly_degree</text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (40,040,040 samples, 0.08%; +0.08%)</title><rect x="1041.2" y="309" width="0.9" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1044.21" y="319.5" ></text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="181" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="191.5" ></text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="213" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="223.5" ></text>
+</g>
+<g >
+<title>gen_normal_poly (23,023,023 samples, 0.04%; 0.00%)</title><rect x="410.3" y="341" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="413.35" y="351.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (20,020,020 samples, 0.04%; +0.01%)</title><rect x="409.7" y="309" width="0.5" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="412.71" y="319.5" ></text>
+</g>
+<g >
+<title>rand (8,008,008 samples, 0.02%; +0.00%)</title><rect x="410.7" y="309" width="0.2" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="413.69" y="319.5" ></text>
+</g>
+<g >
+<title>__GI_munmap (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="293" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="303.5" ></text>
+</g>
+<g >
+<title>[unknown] (228,228,228 samples, 0.44%; -0.11%)</title><rect x="483.1" y="277" width="5.2" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="486.08" y="287.5" ></text>
+</g>
+<g >
+<title>ring_add_no_mod_q (1,318,318,317 samples, 2.53%; 0.00%)</title><rect x="1009.8" y="341" width="29.9" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="1012.82" y="351.5" >ri..</text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="101" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="111.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (835,835,835 samples, 1.61%; -0.10%)</title><rect x="715.8" y="325" width="18.9" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="718.78" y="335.5" ></text>
+</g>
+<g >
+<title>__random (7,007,007 samples, 0.01%; +0.01%)</title><rect x="410.7" y="293" width="0.2" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="413.71" y="303.5" ></text>
+</g>
+<g >
+<title>[unknown] (5,005,005 samples, 0.01%; -0.01%)</title><rect x="488.8" y="53" width="0.1" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="491.78" y="63.5" ></text>
+</g>
+<g >
+<title>poly_mul_scalar (49,049,049 samples, 0.09%; 0.00%)</title><rect x="867.1" y="341" width="1.1" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="870.09" y="351.5" ></text>
+</g>
+<g >
+<title>all (52,045,044,993 samples, 100%)</title><rect x="10.0" y="389" width="1180.0" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="13.00" y="399.5" ></text>
+</g>
+<g >
+<title>[unknown] (26,026,026 samples, 0.05%; +0.01%)</title><rect x="488.3" y="85" width="0.6" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="491.30" y="95.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (526,526,526 samples, 1.01%; +1.01%)</title><rect x="927.9" y="309" width="12.0" height="15.0" fill="rgb(255,206,206)" rx="2" ry="2" />
+<text  x="930.91" y="319.5" ></text>
+</g>
+<g >
+<title>create_poly (1,033,033,032 samples, 1.98%; -0.01%)</title><rect x="734.7" y="325" width="23.5" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="737.73" y="335.5" >c..</text>
+</g>
+<g >
+<title>__memset_evex_unaligned_erms (30,030,030 samples, 0.06%; +0.04%)</title><rect x="867.5" y="309" width="0.7" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="870.52" y="319.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (2,392,392,390 samples, 4.60%; -1.74%)</title><rect x="57.8" y="325" width="54.2" height="15.0" fill="rgb(203,203,255)" rx="2" ry="2" />
+<text  x="60.80" y="335.5" >__mem..</text>
+</g>
+<g >
+<title>add_cipher (1,938,938,937 samples, 3.73%; -0.02%)</title><rect x="10.1" y="341" width="44.0" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="13.09" y="351.5" >add_..</text>
+</g>
+<g >
+<title>[unknown] (5,005,005 samples, 0.01%; +0.00%)</title><rect x="488.8" y="37" width="0.1" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="491.78" y="47.5" ></text>
+</g>
+<g >
+<title>__GI___libc_free (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="309" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="319.5" ></text>
+</g>
+<g >
+<title>ring_mul_no_mod_q (6,408,408,402 samples, 12.31%; +0.00%)</title><rect x="1044.7" y="341" width="145.3" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1047.70" y="351.5" >ring_mul_no_mod_q</text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; -0.00%)</title><rect x="488.3" y="117" width="0.6" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="491.28" y="127.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (109,109,109 samples, 0.21%; +0.21%)</title><rect x="1019.6" y="309" width="2.5" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1022.65" y="319.5" ></text>
+</g>
+<g >
+<title>create_poly (2,605,605,603 samples, 5.01%; -0.01%)</title><rect x="112.0" y="325" width="59.1" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="115.04" y="335.5" >create..</text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="149" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="159.5" ></text>
+</g>
+<g >
+<title>[unknown] (137,137,137 samples, 0.26%; +0.00%)</title><rect x="485.2" y="229" width="3.1" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="488.15" y="239.5" ></text>
+</g>
+<g >
+<title>create_poly (3,005,005,002 samples, 5.77%; +0.11%)</title><rect x="334.8" y="341" width="68.2" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="337.84" y="351.5" >create_..</text>
+</g>
+<g >
+<title>[unknown] (76,076,076 samples, 0.15%; +0.00%)</title><rect x="486.5" y="133" width="1.8" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="489.53" y="143.5" ></text>
+</g>
+<g >
+<title>poly_degree (774,774,774 samples, 1.49%; +1.49%)</title><rect x="1022.1" y="309" width="17.6" height="15.0" fill="rgb(255,204,204)" rx="2" ry="2" />
+<text  x="1025.15" y="319.5" ></text>
+</g>
+<g >
+<title>__memset_evex_unaligned_erms (1,015,015,014 samples, 1.95%; +0.08%)</title><rect x="735.1" y="309" width="23.1" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="738.14" y="319.5" >_..</text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (7,007,007 samples, 0.01%; +0.00%)</title><rect x="867.4" y="325" width="0.1" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="870.36" y="335.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (1,925,925,924 samples, 3.70%; +0.07%)</title><rect x="10.4" y="325" width="43.6" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="13.36" y="335.5" >__me..</text>
+</g>
+<g >
+<title>poly_add (3,353,353,350 samples, 6.44%; +0.51%)</title><rect x="637.9" y="341" width="76.0" height="15.0" fill="rgb(255,208,208)" rx="2" ry="2" />
+<text  x="640.91" y="351.5" >poly_add</text>
+</g>
+<g >
+<title>mul_cipher (6,570,570,564 samples, 12.62%; +0.09%)</title><rect x="488.9" y="341" width="149.0" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="491.94" y="351.5" >mul_cipher</text>
+</g>
+<g >
+<title>[unknown] (100,100,100 samples, 0.19%; +0.01%)</title><rect x="486.0" y="165" width="2.3" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="488.99" y="175.5" ></text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="197" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="207.5" ></text>
+</g>
+<g >
+<title>poly_divmod (884,884,884 samples, 1.70%; 0.00%)</title><rect x="1019.6" y="325" width="20.1" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="1022.65" y="335.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (3,411,411,408 samples, 6.55%; -0.28%)</title><rect x="410.9" y="325" width="77.4" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="413.91" y="335.5" >__memcpy..</text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="245" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="255.5" ></text>
+</g>
+<g >
+<title>gen_normal (10,010,010 samples, 0.02%; +0.00%)</title><rect x="410.6" y="325" width="0.3" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="413.64" y="335.5" ></text>
+</g>
+<g >
+<title>[unknown] (14,014,014 samples, 0.03%; +0.01%)</title><rect x="488.6" y="69" width="0.3" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="491.58" y="79.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (32,032,032 samples, 0.06%; -0.02%)</title><rect x="403.2" y="325" width="0.7" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="406.17" y="335.5" ></text>
+</g>
+<g >
+<title>create_poly (5,005,005 samples, 0.01%; +0.01%)</title><rect x="1084.9" y="309" width="0.1" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1087.85" y="319.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (6,006,006 samples, 0.01%; -0.01%)</title><rect x="410.2" y="325" width="0.1" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="413.16" y="335.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (425,425,425 samples, 0.82%; +0.12%)</title><rect x="1010.0" y="325" width="9.6" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1012.98" y="335.5" ></text>
+</g>
+<g >
+<title>poly_degree (4,632,632,628 samples, 8.90%; +8.90%)</title><rect x="1085.0" y="309" width="105.0" height="15.0" fill="rgb(255,178,178)" rx="2" ry="2" />
+<text  x="1087.97" y="319.5" >poly_degree</text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (4,480,480,476 samples, 8.61%; -2.21%)</title><rect x="535.9" y="325" width="101.6" height="15.0" fill="rgb(202,202,255)" rx="2" ry="2" />
+<text  x="538.90" y="335.5" >__memcpy_eve..</text>
+</g>
+<g >
+<title>[unknown] (92,092,092 samples, 0.18%; -0.01%)</title><rect x="486.2" y="149" width="2.1" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="489.17" y="159.5" ></text>
+</g>
+<g >
+<title>encrypt (273,273,273 samples, 0.53%; +0.01%)</title><rect x="404.0" y="341" width="6.2" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="406.97" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (228,228,228 samples, 0.44%; 0.00%)</title><rect x="483.1" y="309" width="5.2" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="486.08" y="319.5" ></text>
+</g>
+<g >
+<title>[unknown] (69,069,069 samples, 0.13%; -0.08%)</title><rect x="486.7" y="117" width="1.6" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="489.69" y="127.5" ></text>
+</g>
+<g >
+<title>poly_divmod (5,402,402,397 samples, 10.38%; +0.02%)</title><rect x="1067.5" y="325" width="122.5" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1070.51" y="335.5" >poly_divmod</text>
+</g>
+<g >
+<title>poly_degree (114,114,114 samples, 0.22%; +0.22%)</title><rect x="1042.1" y="309" width="2.6" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1045.12" y="319.5" ></text>
+</g>
+<g >
+<title>poly_add (5,005,005 samples, 0.01%; +0.01%)</title><rect x="927.6" y="325" width="0.2" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="930.64" y="335.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (13,013,013 samples, 0.03%; -0.03%)</title><rect x="410.3" y="325" width="0.3" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="413.35" y="335.5" ></text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; -0.00%)</title><rect x="488.3" y="133" width="0.6" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="491.28" y="143.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (63,063,063 samples, 0.12%; -0.30%)</title><rect x="1039.8" y="325" width="1.4" height="15.0" fill="rgb(208,208,255)" rx="2" ry="2" />
+<text  x="1042.76" y="335.5" ></text>
+</g>
+<g >
+<title>[unknown] (155,155,155 samples, 0.30%; -0.00%)</title><rect x="484.7" y="245" width="3.6" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="487.74" y="255.5" ></text>
+</g>
+<g >
+<title>free_ct_matrix (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="325" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="335.5" ></text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="229" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="239.5" ></text>
+</g>
+<g >
+<title>encode_plain_integer (20,020,020 samples, 0.04%; 0.00%)</title><rect x="409.7" y="325" width="0.5" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="412.71" y="335.5" ></text>
+</g>
+<g >
+<title>positive_fmod (147,147,147 samples, 0.28%; -0.03%)</title><rect x="331.5" y="325" width="3.3" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="334.50" y="335.5" ></text>
+</g>
+<g >
+<title>__memset_evex_unaligned_erms (2,597,597,595 samples, 4.99%; -0.53%)</title><rect x="112.2" y="309" width="58.9" height="15.0" fill="rgb(208,208,255)" rx="2" ry="2" />
+<text  x="115.20" y="319.5" >__mems..</text>
+</g>
+<g >
+<title>[unknown] (133,133,133 samples, 0.26%; -0.00%)</title><rect x="485.2" y="197" width="3.1" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="488.24" y="207.5" ></text>
+</g>
+<g >
+<title>main (3,443,443,440 samples, 6.62%; -0.01%)</title><rect x="410.9" y="341" width="78.0" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="413.87" y="351.5" >main</text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="165" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="175.5" ></text>
+</g>
+<g >
+<title>__round (8,008,008 samples, 0.02%; -0.01%)</title><rect x="637.5" y="325" width="0.2" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="640.48" y="335.5" ></text>
+</g>
+<g >
+<title>ring_mul_mod (220,220,220 samples, 0.42%; -0.01%)</title><rect x="1039.7" y="341" width="5.0" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="1042.71" y="351.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (753,753,753 samples, 1.45%; +1.45%)</title><rect x="1067.8" y="309" width="17.1" height="15.0" fill="rgb(255,204,204)" rx="2" ry="2" />
+<text  x="1070.76" y="319.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (249,249,249 samples, 0.48%; +0.04%)</title><rect x="404.1" y="325" width="5.6" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="407.06" y="335.5" ></text>
+</g>
+<g >
+<title>gen_binary_poly (8,008,008 samples, 0.02%; 0.00%)</title><rect x="410.2" y="341" width="0.1" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="413.16" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (228,228,228 samples, 0.44%; -0.00%)</title><rect x="483.1" y="293" width="5.2" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="486.08" y="303.5" ></text>
+</g>
+<g >
+<title>poly_degree (3,082,082,079 samples, 5.92%; +5.92%)</title><rect x="939.9" y="309" width="69.9" height="15.0" fill="rgb(255,189,189)" rx="2" ry="2" />
+<text  x="942.94" y="319.5" >poly_de..</text>
+</g>
+<g >
+<title>[unknown] (118,118,118 samples, 0.23%; -0.01%)</title><rect x="485.6" y="181" width="2.7" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="488.58" y="191.5" ></text>
+</g>
+<g >
+<title>poly_mul (6,754,754,748 samples, 12.98%; -59.79%)</title><rect x="713.9" y="341" width="153.2" height="15.0" fill="rgb(0,0,255)" rx="2" ry="2" />
+<text  x="716.94" y="351.5" >poly_mul</text>
+</g>
+<g >
+<title>poly_divmod (155,155,155 samples, 0.30%; +0.00%)</title><rect x="1041.2" y="325" width="3.5" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="1044.19" y="335.5" ></text>
+</g>
+<g >
+<title>[unknown] (136,136,136 samples, 0.26%; -0.00%)</title><rect x="485.2" y="213" width="3.1" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="488.17" y="223.5" ></text>
+</g>
+<g >
+<title>[unknown] (166,166,166 samples, 0.32%; +0.00%)</title><rect x="484.5" y="261" width="3.8" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="487.49" y="271.5" ></text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (943,943,943 samples, 1.81%; -5.08%)</title><rect x="1046.1" y="325" width="21.4" height="15.0" fill="rgb(192,192,255)" rx="2" ry="2" />
+<text  x="1049.11" y="335.5" >_..</text>
+</g>
+<g >
+<title>poly_divmod (3,619,619,616 samples, 6.95%; +0.01%)</title><rect x="927.8" y="325" width="82.0" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="930.76" y="335.5" >poly_divmod</text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (2,513,513,511 samples, 4.83%; -6.42%)</title><rect x="870.5" y="325" width="57.0" height="15.0" fill="rgb(187,187,255)" rx="2" ry="2" />
+<text  x="873.54" y="335.5" >__memc..</text>
+</g>
+<g >
+<title>__memcpy_evex_unaligned_erms (691,691,691 samples, 1.33%; +0.05%)</title><rect x="672.5" y="325" width="15.7" height="15.0" fill="rgb(255,209,209)" rx="2" ry="2" />
+<text  x="675.52" y="335.5" ></text>
+</g>
+<g >
+<title>__memset_evex_unaligned_erms (2,919,919,917 samples, 5.61%; +3.70%)</title><rect x="336.8" y="325" width="66.2" height="15.0" fill="rgb(255,196,196)" rx="2" ry="2" />
+<text  x="339.77" y="335.5" >__memse..</text>
+</g>
+<g >
+<title>bench_matmul.ex (52,045,044,993 samples, 100.00%; 0.00%)</title><rect x="10.0" y="373" width="1180.0" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="13.00" y="383.5" >bench_matmul.ex</text>
+</g>
+<g >
+<title>poly_degree (7,073,073,066 samples, 13.59%; +13.59%)</title><rect x="171.1" y="325" width="160.4" height="15.0" fill="rgb(255,162,162)" rx="2" ry="2" />
+<text  x="174.14" y="335.5" >poly_degree</text>
+</g>
+<g >
+<title>[unknown] (52,045,044,993 samples, 100.00%; 0.00%)</title><rect x="10.0" y="357" width="1180.0" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="13.00" y="367.5" >[unknown]</text>
+</g>
+<g >
+<title>ring_add_mod (6,246,246,240 samples, 12.00%; -0.03%)</title><rect x="868.2" y="341" width="141.6" height="15.0" fill="rgb(209,209,255)" rx="2" ry="2" />
+<text  x="871.20" y="351.5" >ring_add_mod</text>
+</g>
+<g >
+<title>[unknown] (27,027,027 samples, 0.05%; 0.00%)</title><rect x="488.3" y="261" width="0.6" height="15.0" fill="rgb(255,255,255)" rx="2" ry="2" />
+<text  x="491.28" y="271.5" ></text>
+</g>
+</g>
+</svg>
